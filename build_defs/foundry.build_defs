@@ -1,0 +1,79 @@
+def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibility:list=[]):
+    """
+    Downloads pre-built Foundry binaries (anvil, forge, cast, chisel).
+
+    Usage:
+        foundry(name = "foundry", version = "1.5.0", visibility = ["PUBLIC"])
+
+    Access individual binaries:
+        //third_party/binary:foundry|anvil
+        //third_party/binary:foundry|forge
+        //third_party/binary:foundry|cast
+        //third_party/binary:foundry|chisel
+
+    Args:
+        name (str): Name of the rule.
+        version (str): Foundry version (e.g., "1.5.0").
+        os (str): Target OS. Defaults to current OS.
+        arch (str): Target architecture. Defaults to current arch.
+        hashes (list): Optional hashes to verify download.
+        visibility (list): Visibility declaration.
+    """
+    if not os:
+        if CONFIG.OS == 'linux':
+            os = 'linux'
+        elif CONFIG.OS == 'darwin':
+            os = 'darwin'
+        else:
+            raise ParseError(f'Unknown OS {CONFIG.OS}')
+
+    if not arch:
+        if CONFIG.ARCH == 'amd64':
+            arch = 'amd64'
+        elif CONFIG.ARCH == 'arm64':
+            arch = 'arm64'
+        else:
+            raise ParseError(f'Unknown architecture {CONFIG.ARCH}')
+
+    target = f'{os}_{arch}'
+    url = f"https://github.com/foundry-rs/foundry/releases/download/v{version}/foundry_v{version}_{target}.tar.gz"
+
+    download = remote_file(
+        name = tag(name, "download"),
+        url = url,
+        hashes = hashes,
+    )
+
+    install = build_rule(
+        name = tag(name, "install"),
+        srcs = [download],
+        outs = {
+            "anvil": [f"{target}/anvil"],
+            "forge": [f"{target}/forge"],
+            "cast": [f"{target}/cast"],
+            "chisel": [f"{target}/chisel"],
+        },
+        cmd = " && ".join([
+            f"mkdir -p {target}",
+            "tar -xzf $SRC",
+            f"mv anvil {target}/",
+            f"mv forge {target}/",
+            f"mv cast {target}/",
+            f"mv chisel {target}/",
+        ]),
+        binary = True,
+        building_description = f"Extracting Foundry v{version} for {target}...",
+    )
+
+    filegroup(
+        name = name,
+        srcs = [
+            install + "|anvil",
+            install + "|forge",
+            install + "|cast",
+            install + "|chisel",
+        ],
+        deps = [install],
+        binary = True,
+        visibility = visibility,
+    )
