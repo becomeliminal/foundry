@@ -44,8 +44,8 @@ def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibilit
         hashes = hashes,
     )
 
-    install = build_rule(
-        name = tag(name, "install"),
+    build_rule(
+        name = name,
         srcs = [download],
         outs = {
             "anvil": [f"{target}/anvil"],
@@ -62,18 +62,6 @@ def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibilit
             f"mv chisel {target}/",
         ]),
         binary = True,
-        building_description = f"Extracting Foundry v{version} for {target}...",
-    )
-
-    filegroup(
-        name = name,
-        srcs = [
-            install + "|anvil",
-            install + "|forge",
-            install + "|cast",
-            install + "|chisel",
-        ],
-        deps = [install],
-        binary = True,
         visibility = visibility,
+        building_description = f"Extracting Foundry v{version} for {target}...",
     )
