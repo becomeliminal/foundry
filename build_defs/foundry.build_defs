@@ -74,6 +74,7 @@ def anvil_fork_state(
     block_number: int,
     warmup_addresses: list = [],
     warmup_storage: dict = {},
+    set_storage: dict = {},
     deploy_code: dict = {},
     fund_accounts: dict = {},
     foundry_tool: str = "",
@@ -129,8 +130,11 @@ def anvil_fork_state(
             Find recent blocks at etherscan/arbiscan/basescan.
         warmup_addresses: Contract addresses to include in state.
             Their bytecode will be fetched and persisted.
-        warmup_storage: Storage slots to prefetch. Format: {address: [slot, ...]}
+        warmup_storage: Storage slots to prefetch from fork. Format: {address: [slot, ...]}
             Slots are hex strings like "0x0", "0x1", etc.
+        set_storage: Set custom storage values. Format: {address: {slot: value}}
+            Use this to configure contract state (e.g., Safe owners, EntryPoint deposits).
+            Both slot and value should be 32-byte hex strings.
         deploy_code: Deploy custom bytecode at addresses. Format: {address: "0x..."}
             Useful for mock contracts or simulation helpers.
         fund_accounts: Fund accounts with ETH. Format: {address: amount}
@@ -227,6 +231,14 @@ def anvil_fork_state(
                 f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} "$VAL" --rpc-url $URL > /dev/null'
             )
 
+    # Build set_storage commands using cast rpc
+    set_storage_cmds = []
+    for addr, slots in set_storage.items():
+        for slot, value in slots.items():
+            set_storage_cmds.append(
+                f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} {value} --rpc-url $URL > /dev/null'
+            )
+
     # Build deploy commands using cast rpc
     deploy_cmds = []
     for addr, bytecode in deploy_code.items():
@@ -238,7 +250,7 @@ def anvil_fork_state(
         # Use cast to convert amount to hex (handles "100 ether", "1000000 wei", etc.)
         fund_cmds.append(f'$TOOLS_CAST rpc anvil_setBalance {addr} $($TOOLS_CAST --to-base $($TOOLS_CAST to-wei {amount}) hex) --rpc-url $URL > /dev/null')
 
-    all_cmds = warmup_cmds + deploy_cmds + fund_cmds
+    all_cmds = warmup_cmds + set_storage_cmds + deploy_cmds + fund_cmds
     setup_cmds = " && ".join(all_cmds) if all_cmds else "true"
 
     genrule(

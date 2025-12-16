@@ -62,6 +62,16 @@ anvil_fork_state(
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
         "0x4200000000000000000000000000000000000006",  # WETH on Base
     ],
+    deploy_code = {
+        # Mock paymaster at 0xdEaD
+        "0x000000000000000000000000000000000000dEaD": "0x60406000526000602052600060405260606000f3",
+    },
+    set_storage = {
+        # Mock paymaster deposit in EntryPoint (100 ETH)
+        "0x0000000071727De22E5E9d8BAf0edAc6f37da032": {
+            "0x44ad89ba62b98ff34f51403ac22759b55759460c0bb5521eb4b6ee3cff49cf83": "0x0000000000000000000000000000000000000000000000056bc75e2d63100000",
+        },
+    },
     fund_accounts = {
         "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": "1000 ether",
     },
