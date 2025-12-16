@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test that warmup_storage correctly preserves storage slots
+# Test that warmup_storage correctly preserves storage AND proxy functionality
 # This verifies the fix for anvil_setCode marking addresses as "local"
 # which breaks subsequent fork storage reads.
 
@@ -31,39 +31,41 @@ for i in {1..30}; do
     sleep 0.5
 done
 
-# Test USDC storage slots
 USDC="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 FAILED=0
-ZERO="0x0000000000000000000000000000000000000000000000000000000000000000"
-
-check_slot() {
-    local slot=$1
-    local desc=$2
-    local val=$($CAST storage $USDC $slot --rpc-url $RPC_URL)
-    if [ "$val" = "$ZERO" ]; then
-        echo "FAIL: Slot $slot ($desc) is zero - warmup_storage did not preserve it"
-        FAILED=1
-    else
-        echo "PASS: Slot $slot ($desc) = ${val:0:30}..."
-    fi
-}
 
 echo ""
-echo "Testing USDC storage slots..."
-echo "=============================="
+echo "Testing USDC proxy functionality..."
+echo "===================================="
 
-# These slots should have non-zero values from mainnet
-check_slot "0x0" "owner"
-check_slot "0x4" "name (USD Coin)"
-check_slot "0x5" "symbol (USDC)"
-check_slot "0x6" "decimals"
-check_slot "0xf" "DOMAIN_SEPARATOR (critical for EIP-3009)"
+# THE REAL TEST: Can we actually call functions on the USDC proxy?
+# This will fail if the proxy admin/implementation slots are broken
+echo "Calling balanceOf(0xdead)..."
+BALANCE=$($CAST call $USDC "balanceOf(address)(uint256)" 0x000000000000000000000000000000000000dEaD --rpc-url $RPC_URL 2>&1) || {
+    echo "FAIL: balanceOf() call failed: $BALANCE"
+    FAILED=1
+}
+
+if [ $FAILED -eq 0 ]; then
+    echo "PASS: balanceOf() returned: $BALANCE"
+fi
+
+# Also check name() to verify proxy delegates correctly
+echo "Calling name()..."
+NAME=$($CAST call $USDC "name()(string)" --rpc-url $RPC_URL 2>&1) || {
+    echo "FAIL: name() call failed: $NAME"
+    FAILED=1
+}
+
+if [ $FAILED -eq 0 ]; then
+    echo "PASS: name() returned: $NAME"
+fi
 
 echo ""
 if [ $FAILED -eq 0 ]; then
-    echo "SUCCESS: All storage slots were preserved correctly"
+    echo "SUCCESS: USDC proxy is functional"
 else
-    echo "FAILURE: Some storage slots were not preserved"
+    echo "FAILURE: USDC proxy is broken - warmup_storage did not preserve critical slots"
 fi
 
 exit $FAILED

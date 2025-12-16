@@ -59,7 +59,8 @@ anvil_fork_state(
     block_number = 23000000,  # Pin to stable block for reproducibility
     warmup_addresses = [
         "0x0000000071727De22E5E9d8BAf0edAc6f37da032",  # EntryPoint v0.7
-        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC proxy on Base
+        "0x2Ce6311ddAE708829bc0784C967b7d77D19FD779",  # USDC implementation (FiatTokenV2_2)
         "0x4200000000000000000000000000000000000006",  # WETH on Base
     ],
     # Test warmup_storage - preserve USDC storage slots when using setCode
@@ -68,6 +69,9 @@ anvil_fork_state(
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": [
             "0x0", "0x1", "0x2", "0x3", "0x4", "0x5", "0x6", "0x7",
             "0x8", "0x9", "0xa", "0xb", "0xc", "0xd", "0xe", "0xf",
+            # ZeppelinOS proxy slots (keccak hash, NOT hash-1)
+            "0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b",  # Admin
+            "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3",  # Implementation
         ],
     },
     deploy_code = {
