@@ -229,8 +229,9 @@ def anvil_fork_state(
         addr_clean = addr[2:] if addr.startswith("0x") else addr
         for slot in slots:
             slot_clean = slot[2:] if slot.startswith("0x") else slot
+            var_name = 'STORAGE_' + addr_clean + '_' + slot_clean
             warmup_storage_pre.append(
-                f'STORAGE_{addr_clean}_{slot_clean}=$($TOOLS_CAST storage {addr} {slot} --rpc-url $URL)'
+                var_name + '=$($TOOLS_CAST storage ' + addr + ' ' + slot + ' --rpc-url $URL)'
             )
 
     # Read code and set it
@@ -243,9 +244,10 @@ def anvil_fork_state(
         addr_clean = addr[2:] if addr.startswith("0x") else addr
         for slot in slots:
             slot_clean = slot[2:] if slot.startswith("0x") else slot
-            var_name = f'STORAGE_{addr_clean}_{slot_clean}'
+            var_name = 'STORAGE_' + addr_clean + '_' + slot_clean
+            # Use string concat to avoid f-string escaping issues with shell variables
             warmup_storage_post.append(
-                f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} "${var_name}" --rpc-url $URL > /dev/null'
+                '$TOOLS_CAST rpc anvil_setStorageAt ' + addr + ' ' + slot + ' "$' + var_name + '" --rpc-url $URL > /dev/null'
             )
 
     # Combine: read storage first, then setCode, then set storage

@@ -62,6 +62,14 @@ anvil_fork_state(
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
         "0x4200000000000000000000000000000000000006",  # WETH on Base
     ],
+    # Test warmup_storage - preserve USDC storage slots when using setCode
+    # Includes slot 0xf (DOMAIN_SEPARATOR) which is critical for EIP-3009
+    warmup_storage = {
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": [
+            "0x0", "0x1", "0x2", "0x3", "0x4", "0x5", "0x6", "0x7",
+            "0x8", "0x9", "0xa", "0xb", "0xc", "0xd", "0xe", "0xf",
+        ],
+    },
     deploy_code = {
         # Mock paymaster at 0xdEaD
         "0x000000000000000000000000000000000000dEaD": "0x60406000526000602052600060405260606000f3",
@@ -77,4 +85,18 @@ anvil_fork_state(
     },
     foundry_tool = ":foundry",
     visibility = ["PUBLIC"],
+)
+
+# Test that warmup_storage correctly preserves storage slots
+gentest(
+    name = "warmup_storage_test",
+    test_cmd = "bash $DATA_TEST_SCRIPT",
+    data = {
+        "STATE": [":base_fork_state"],
+        "ANVIL": [":foundry|anvil"],
+        "CAST": [":foundry|cast"],
+        "TEST_SCRIPT": ["warmup_storage_test.sh"],
+    },
+    no_test_output = True,
+    labels = ["integration"],
 )
