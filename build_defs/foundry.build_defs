@@ -217,19 +217,34 @@ def anvil_fork_state(
     """
     tool = foundry_tool if foundry_tool else "//third_party/binary:foundry"
 
-    # Build warmup commands - read code from fork then set it to persist in dump
+    # Build warmup commands - read code AND storage from fork, then set both
+    # IMPORTANT: We must read storage BEFORE calling setCode, because setCode marks
+    # the address as "local" which causes subsequent storage reads to return empty.
     warmup_cmds = []
-    for addr in warmup_addresses:
-        # Read code from fork, then set it so it's included in state dump
-        warmup_cmds.append(f'CODE=$($TOOLS_CAST code {addr} --rpc-url $URL) && $TOOLS_CAST rpc anvil_setCode {addr} "$CODE" --rpc-url $URL > /dev/null')
 
-    # Build storage warmup commands - read then set to persist in dump
+    # First, read storage for warmup addresses (before setCode makes them local)
+    warmup_storage_pre = []
     for addr, slots in warmup_storage.items():
         for slot in slots:
-            warmup_cmds.append(
-                f'VAL=$($TOOLS_CAST storage {addr} {slot} --rpc-url $URL) && '
-                f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} "$VAL" --rpc-url $URL > /dev/null'
+            warmup_storage_pre.append(
+                f'STORAGE_{addr.replace("0x", "")}_{slot.replace("0x", "")}=$($TOOLS_CAST storage {addr} {slot} --rpc-url $URL)'
             )
+
+    # Read code and set it
+    for addr in warmup_addresses:
+        warmup_cmds.append(f'CODE=$($TOOLS_CAST code {addr} --rpc-url $URL) && $TOOLS_CAST rpc anvil_setCode {addr} "$CODE" --rpc-url $URL > /dev/null')
+
+    # Now set the pre-read storage values
+    warmup_storage_post = []
+    for addr, slots in warmup_storage.items():
+        for slot in slots:
+            var_name = f'STORAGE_{addr.replace("0x", "")}_{slot.replace("0x", "")}'
+            warmup_storage_post.append(
+                f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} "${var_name}" --rpc-url $URL > /dev/null'
+            )
+
+    # Combine: read storage first, then setCode, then set storage
+    warmup_cmds = warmup_storage_pre + warmup_cmds + warmup_storage_post
 
     # Build set_storage commands using cast rpc
     set_storage_cmds = []
