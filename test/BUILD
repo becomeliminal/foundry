@@ -23,7 +23,7 @@ anvil_fork_state(
     name = "arbitrum_fork_state",
     fork_url = "https://arb1.arbitrum.io/rpc",
     chain_id = 42161,
-    block_number = 280000000,  # Pin to stable block for reproducibility
+    block_number = 411260000,  # Pin to stable block for reproducibility
     warmup_addresses = [
         "0x0000000071727De22E5E9d8BAf0edAc6f37da032",  # EntryPoint v0.7
         "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",  # Safe Proxy Factory

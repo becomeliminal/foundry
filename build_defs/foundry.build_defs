@@ -282,9 +282,10 @@ def anvil_fork_state(
             echo "Mining block..."
             $TOOLS_CAST rpc evm_mine --rpc-url $URL > /dev/null
 
-            # Dump state (keep original block numbers - they match the blocks array)
+            # Dump state - anvil_dumpState returns hex-encoded gzipped JSON
+            # Pipeline: hex -> binary (gzip) -> JSON
             echo "Dumping state..."
-            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | jq -r '.' | xxd -r -p > $OUTS
+            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | jq -r '.' | xxd -r -p | gunzip > $OUTS
 
             echo "State saved to $OUTS"
         """,
