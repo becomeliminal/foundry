@@ -65,3 +65,230 @@ def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibilit
         visibility = visibility,
         building_description = f"Extracting Foundry v{version} for {target}...",
     )
+
+
+def anvil_fork_state(
+    name: str,
+    fork_url: str,
+    chain_id: int,
+    block_number: int,
+    warmup_addresses: list = [],
+    warmup_storage: dict = {},
+    deploy_code: dict = {},
+    fund_accounts: dict = {},
+    foundry_tool: str = "",
+    visibility: list = [],
+):
+    """
+    Generates a hermetic Anvil fork state file from a live blockchain.
+
+    This rule forks a live chain (Arbitrum, Base, etc.), fetches specified contract
+    bytecode and storage, then dumps the state to a file. The resulting state file
+    can be loaded by Anvil with NO network access - fully hermetic and deterministic.
+
+    ┌─────────────────────────────────────────────────────────────────────────────┐
+    │  BUILD TIME (network required)                                              │
+    │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+    │  │ Fork chain   │───▶│ Fetch code & │───▶│ Dump state   │──▶ state.json    │
+    │  │ at block N   │    │ storage      │    │ to file      │                   │
+    │  └──────────────┘    └──────────────┘    └──────────────┘                   │
+    └─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────────────────────────────────────────────────────────────────────┐
+    │  TEST TIME (fully offline)                                                  │
+    │  ┌──────────────┐    ┌──────────────────────────────────────────────────┐   │
+    │  │ state.json   │───▶│ anvil --load-state state.json --chain-id 42161  │   │
+    │  │ (from plz)   │    │ Instant startup, no network, deterministic      │   │
+    │  └──────────────┘    └──────────────────────────────────────────────────┘   │
+    └─────────────────────────────────────────────────────────────────────────────┘
+
+    WHY USE THIS?
+    - Hermetic tests: No flaky network calls during test execution
+    - Fast startup: State loads in milliseconds vs seconds for fork mode
+    - Deterministic: Same block number = same state = reproducible tests
+    - Real contracts: Test against actual mainnet bytecode (USDC, EntryPoint, etc.)
+
+    IMPORTANT NOTES:
+    - The state file is gzipped JSON - Anvil handles decompression automatically
+    - Pin to a specific block_number for reproducibility (don't use "latest")
+    - Only contracts in warmup_addresses will have their code in the state
+    - Use warmup_storage for contracts where you need specific storage slots
+    - The rule requires network access at BUILD time (sandbox = False)
+
+    Args:
+        name: Rule name. Output will be {name}.json (gzipped)
+        fork_url: RPC URL to fork from. Public RPCs:
+            - Arbitrum: "https://arb1.arbitrum.io/rpc"
+            - Base: "https://mainnet.base.org"
+            - Ethereum: "https://eth.llamarpc.com"
+        chain_id: Chain ID for the network:
+            - Arbitrum: 42161
+            - Base: 8453
+            - Ethereum: 1
+        block_number: Block number to fork at. Pin this for determinism!
+            Find recent blocks at etherscan/arbiscan/basescan.
+        warmup_addresses: Contract addresses to include in state.
+            Their bytecode will be fetched and persisted.
+        warmup_storage: Storage slots to prefetch. Format: {address: [slot, ...]}
+            Slots are hex strings like "0x0", "0x1", etc.
+        deploy_code: Deploy custom bytecode at addresses. Format: {address: "0x..."}
+            Useful for mock contracts or simulation helpers.
+        fund_accounts: Fund accounts with ETH. Format: {address: amount}
+            Amount can be human-readable: "100 ether", "0.5 ether", "1000000 wei"
+        foundry_tool: Path to foundry rule. Default: //third_party/binary:foundry
+        visibility: Visibility declaration for the rule.
+
+    EXAMPLES:
+
+    1. Basic Arbitrum fork with ERC-4337 contracts:
+
+        anvil_fork_state(
+            name = "arbitrum_state",
+            fork_url = "https://arb1.arbitrum.io/rpc",
+            chain_id = 42161,
+            block_number = 280000000,
+            warmup_addresses = [
+                "0x0000000071727De22E5E9d8BAf0edAc6f37da032",  # EntryPoint v0.7
+                "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",  # Safe Factory
+                "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",  # USDC
+            ],
+            fund_accounts = {
+                "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": "100 ether",
+            },
+        )
+
+    2. Base fork for stablecoin testing:
+
+        anvil_fork_state(
+            name = "base_state",
+            fork_url = "https://mainnet.base.org",
+            chain_id = 8453,
+            block_number = 20000000,
+            warmup_addresses = [
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+                "0x4200000000000000000000000000000000000006",  # WETH on Base
+            ],
+            fund_accounts = {
+                "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": "10 ether",
+            },
+        )
+
+    3. With custom mock contracts:
+
+        anvil_fork_state(
+            name = "test_state",
+            fork_url = "https://arb1.arbitrum.io/rpc",
+            chain_id = 42161,
+            block_number = 280000000,
+            warmup_addresses = ["0x0000000071727De22E5E9d8BAf0edAc6f37da032"],
+            deploy_code = {
+                # Deploy mock paymaster at a specific address
+                "0x000000000000000000000000000000000000dEaD": "0x608060405234...",
+            },
+            fund_accounts = {
+                "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": "1000 ether",
+            },
+        )
+
+    USING THE STATE IN TESTS:
+
+        # In your BUILD file:
+        go_test(
+            name = "my_test",
+            srcs = ["my_test.go"],
+            data = ["//path/to:arbitrum_state"],
+        )
+
+        # In your test setup (Go):
+        statePath := os.Getenv("DATA_ARBITRUM_STATE")
+        // Start Anvil: anvil --load-state <statePath> --chain-id 42161
+
+    UPDATING THE STATE:
+
+        When you need to update the state (new contracts, new block):
+        1. Update block_number to a recent block
+        2. Add new addresses to warmup_addresses
+        3. Run: plz build //path/to:state_target
+        4. The state file is cached - only rebuilds when inputs change
+    """
+    tool = foundry_tool if foundry_tool else "//third_party/binary:foundry"
+
+    # Build warmup commands - read code from fork then set it to persist in dump
+    warmup_cmds = []
+    for addr in warmup_addresses:
+        # Read code from fork, then set it so it's included in state dump
+        warmup_cmds.append(f'CODE=$($TOOLS_CAST code {addr} --rpc-url $URL) && $TOOLS_CAST rpc anvil_setCode {addr} "$CODE" --rpc-url $URL > /dev/null')
+
+    # Build storage warmup commands - read then set to persist in dump
+    for addr, slots in warmup_storage.items():
+        for slot in slots:
+            warmup_cmds.append(
+                f'VAL=$($TOOLS_CAST storage {addr} {slot} --rpc-url $URL) && '
+                f'$TOOLS_CAST rpc anvil_setStorageAt {addr} {slot} "$VAL" --rpc-url $URL > /dev/null'
+            )
+
+    # Build deploy commands using cast rpc
+    deploy_cmds = []
+    for addr, bytecode in deploy_code.items():
+        deploy_cmds.append(f'$TOOLS_CAST rpc anvil_setCode {addr} {bytecode} --rpc-url $URL > /dev/null')
+
+    # Build fund commands using cast rpc (convert amount to hex using cast)
+    fund_cmds = []
+    for addr, amount in fund_accounts.items():
+        # Use cast to convert amount to hex (handles "100 ether", "1000000 wei", etc.)
+        fund_cmds.append(f'$TOOLS_CAST rpc anvil_setBalance {addr} $($TOOLS_CAST --to-base $($TOOLS_CAST to-wei {amount}) hex) --rpc-url $URL > /dev/null')
+
+    all_cmds = warmup_cmds + deploy_cmds + fund_cmds
+    setup_cmds = " && ".join(all_cmds) if all_cmds else "true"
+
+    genrule(
+        name = name,
+        outs = [f"{name}.json"],
+        tools = {
+            "anvil": [f"{tool}|anvil"],
+            "cast": [f"{tool}|cast"],
+        },
+        cmd = f"""
+            set -e
+            PORT=18545
+            URL=http://localhost:$PORT
+
+            # Start Anvil with fork in background
+            $TOOLS_ANVIL --fork-url {fork_url} \\
+                --fork-block-number {block_number} \\
+                --chain-id {chain_id} \\
+                --port $PORT \\
+                --silent &
+            PID=$!
+
+            # Cleanup on exit
+            trap "kill $PID 2>/dev/null || true" EXIT
+
+            # Wait for Anvil to be ready (up to 60s)
+            echo "Waiting for Anvil to start..."
+            for i in $(seq 1 60); do
+                if $TOOLS_CAST chain-id --rpc-url $URL 2>/dev/null; then
+                    echo "Anvil ready after $i seconds"
+                    break
+                fi
+                sleep 1
+            done
+
+            # Execute setup commands (warmup, deploy, fund)
+            echo "Running setup commands..."
+            {setup_cmds}
+
+            # Mine a block so the state has block hashes for offline loading
+            echo "Mining block..."
+            $TOOLS_CAST rpc evm_mine --rpc-url $URL > /dev/null
+
+            # Dump state (keep original block numbers - they match the blocks array)
+            echo "Dumping state..."
+            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | jq -r '.' | xxd -r -p > $OUTS
+
+            echo "State saved to $OUTS"
+        """,
+        sandbox = False,
+        visibility = visibility,
+        building_description = f"Generating fork state from {fork_url} at block {block_number}...",
+    )
