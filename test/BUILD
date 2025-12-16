@@ -51,6 +51,11 @@ anvil_fork_state(
 # Contracts included:
 #   - USDC: Native USDC on Base
 #   - WETH: Wrapped ETH
+#
+# N.B. Debugging hermetic state issues:
+#   When a call reverts with empty data, use `cast call --trace` to see the
+#   internal calls. If you see "call to non-contract address 0x...", that
+#   address needs to be added to warmup_addresses.
 # =============================================================================
 anvil_fork_state(
     name = "base_fork_state",
@@ -61,6 +66,7 @@ anvil_fork_state(
         "0x0000000071727De22E5E9d8BAf0edAc6f37da032",  # EntryPoint v0.7
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC proxy on Base
         "0x2Ce6311ddAE708829bc0784C967b7d77D19FD779",  # USDC implementation (FiatTokenV2_2)
+        "0x2D943E25e1859ED786AFe4AFB2B42e14EFAC691e",  # USDC SignatureChecker (required for EIP-3009)
         "0x4200000000000000000000000000000000000006",  # WETH on Base
     ],
     # Test warmup_storage - preserve USDC storage slots when using setCode
@@ -100,6 +106,21 @@ gentest(
         "ANVIL": [":foundry|anvil"],
         "CAST": [":foundry|cast"],
         "TEST_SCRIPT": ["warmup_storage_test.sh"],
+    },
+    no_test_output = True,
+    labels = ["integration"],
+)
+
+# Test EIP-3009 transferWithAuthorization functionality
+# This verifies USDC proxy, implementation, DOMAIN_SEPARATOR, and transfers all work
+gentest(
+    name = "eip3009_test",
+    test_cmd = "bash $DATA_TEST_SCRIPT",
+    data = {
+        "STATE": [":base_fork_state"],
+        "ANVIL": [":foundry|anvil"],
+        "CAST": [":foundry|cast"],
+        "TEST_SCRIPT": ["eip3009_test.sh"],
     },
     no_test_output = True,
     labels = ["integration"],
