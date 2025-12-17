@@ -53,6 +53,35 @@ Access individual binaries:
 
 The `anvil_fork_state()` rule generates offline blockchain state files from live networks. Network is required at build time, but tests run fully offline with deterministic results.
 
+### What It Does Under the Hood
+
+This is equivalent to manually running:
+
+```bash
+# 1. Start a fork
+anvil --fork-url https://arb1.arbitrum.io/rpc --fork-block-number 280000000 --chain-id 42161
+
+# 2. For each warmup_storage address, read slots BEFORE setCode (critical!)
+SLOT_VALUE=$(cast storage 0xUSDC 0x0 --rpc-url http://localhost:8545)
+
+# 3. For each warmup_addresses, fetch and set code
+CODE=$(cast code 0xUSDC --rpc-url https://arb1.arbitrum.io/rpc)
+cast rpc anvil_setCode 0xUSDC $CODE --rpc-url http://localhost:8545
+
+# 4. Restore the storage we read earlier (setCode broke it)
+cast rpc anvil_setStorageAt 0xUSDC 0x0 $SLOT_VALUE --rpc-url http://localhost:8545
+
+# 5. Set any custom storage, deploy custom code, fund accounts...
+
+# 6. Mine a block (required for offline loading)
+cast rpc evm_mine --rpc-url http://localhost:8545
+
+# 7. Dump state to file
+cast rpc anvil_dumpState --rpc-url http://localhost:8545 | jq -r '.' | xxd -r -p | gunzip > state.json
+```
+
+The plugin automates all of this and produces a `.json` state file that can be included as a data dependency in any test. I primarily use this to include real mainnet contract state in Go tests without needing network access at test time.
+
 ```python
 anvil_fork_state(
     name = "arbitrum_state",
