@@ -298,14 +298,14 @@ def anvil_fork_state(
     if warmup_storage_file:
         file_cmds += """
             : > _slot_vals.txt
-            grep -vE '^\s*(#|$)' $SRCS_STORAGE | while read -r A S; do
+            grep -vE '^[[:space:]]*(#|$)' $SRCS_STORAGE | while read -r A S _comment; do
                 V=$($TOOLS_CAST storage $A $S --rpc-url $URL)
                 echo "$A $S $V" >> _slot_vals.txt
             done
         """
     if warmup_addresses_file:
         file_cmds += """
-            grep -vE '^\s*(#|$)' $SRCS_ADDRESSES | while read -r A; do
+            grep -vE '^[[:space:]]*(#|$)' $SRCS_ADDRESSES | while read -r A _comment; do
                 CODE=$($TOOLS_CAST code $A --rpc-url $URL)
                 $TOOLS_CAST rpc anvil_setCode $A "$CODE" --rpc-url $URL > /dev/null
             done
