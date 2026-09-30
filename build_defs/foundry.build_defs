@@ -294,7 +294,7 @@ def anvil_fork_state(
     # address local and later reads return empty), then set code, then write the
     # values back. Loops read from srcs, so the slot count never hits the
     # kernel's argument-size cap the way inlined commands do.
-    file_cmds = ""
+    file_cmds = "true"
     if warmup_storage_file:
         file_cmds += """
             : > _slot_vals.txt
@@ -354,7 +354,7 @@ def anvil_fork_state(
             done
 
             # File-driven warmup (large slot/address sets)
-            {file_cmds if file_cmds else "true"}
+            {file_cmds}
 
             # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
