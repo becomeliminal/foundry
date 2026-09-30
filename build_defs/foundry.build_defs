@@ -294,7 +294,10 @@ def anvil_fork_state(
     # address local and later reads return empty), then set code, then write the
     # values back. Loops read from srcs, so the slot count never hits the
     # kernel's argument-size cap the way inlined commands do.
-    file_cmds = ""
+    # Renders between the readiness loop and the setup commands. The default
+    # is exactly the original blank line, keeping dict-only callers' commands
+    # byte-identical (and their cached states valid).
+    file_cmds = "\n"
     if warmup_storage_file:
         file_cmds += """
             # File-driven warmup (large slot/address sets)
@@ -358,9 +361,7 @@ def anvil_fork_state(
                 fi
                 sleep 1
             done
-
-            {file_cmds}
-            # Execute setup commands (warmup, deploy, fund)
+{file_cmds}            # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
             {setup_cmds}
 
