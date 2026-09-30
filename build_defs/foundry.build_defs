@@ -74,6 +74,8 @@ def anvil_fork_state(
     block_number: int,
     warmup_addresses: list = [],
     warmup_storage: dict = {},
+    warmup_addresses_file: str = "",
+    warmup_storage_file: str = "",
     set_storage: dict = {},
     deploy_code: dict = {},
     fund_accounts: dict = {},
@@ -132,6 +134,13 @@ def anvil_fork_state(
             Their bytecode will be fetched and persisted.
         warmup_storage: Storage slots to prefetch from fork. Format: {address: [slot, ...]}
             Slots are hex strings like "0x0", "0x1", etc.
+        warmup_addresses_file: A source file with one contract address per line
+            (blank lines and #-comments ignored). Use for large address sets:
+            inline lists are baked into the genrule's shell command, which the
+            kernel caps at MAX_ARG_STRLEN (~131 KB, ≈225 storage slots).
+        warmup_storage_file: A source file with "ADDRESS SLOT" per line (blank
+            lines and #-comments ignored). File-driven slots have no count
+            ceiling; combine freely with the inline dict.
         set_storage: Set custom storage values. Format: {address: {slot: value}}
             Use this to configure contract state (e.g., Safe owners, EntryPoint deposits).
             Both slot and value should be 32-byte hex strings.
@@ -275,8 +284,53 @@ def anvil_fork_state(
     all_cmds = warmup_cmds + set_storage_cmds + deploy_cmds + fund_cmds
     setup_cmds = " && ".join(all_cmds) if all_cmds else "true"
 
+    file_srcs = {}
+    if warmup_storage_file:
+        file_srcs["storage"] = [warmup_storage_file]
+    if warmup_addresses_file:
+        file_srcs["addresses"] = [warmup_addresses_file]
+
+    # File-driven warmup: read every slot BEFORE any setCode (setCode marks the
+    # address local and later reads return empty), then set code, then write the
+    # values back. Loops read from srcs, so the slot count never hits the
+    # kernel's argument-size cap the way inlined commands do.
+    # Renders between the readiness loop and the setup commands. The default
+    # is exactly the original blank line, keeping dict-only callers' commands
+    # byte-identical (and their cached states valid).
+    file_cmds = "\n"
+    if warmup_storage_file:
+        file_cmds += """
+            # File-driven warmup (large slot/address sets)
+            : > _slot_vals.txt
+            grep -vE '^[[:space:]]*(#|$)' $SRCS_STORAGE | while read -r A S _comment; do
+                V=$($TOOLS_CAST storage $A $S --rpc-url $URL)
+                echo "$A $S $V" >> _slot_vals.txt
+            done
+        """
+    if warmup_addresses_file:
+        file_cmds += """
+            grep -vE '^[[:space:]]*(#|$)' $SRCS_ADDRESSES | while read -r A _comment; do
+                CODE=$($TOOLS_CAST code $A --rpc-url $URL)
+                $TOOLS_CAST rpc anvil_setCode $A "$CODE" --rpc-url $URL > /dev/null
+            done
+        """
+    if warmup_storage_file:
+        file_cmds += """
+            while read -r A S V; do
+                $TOOLS_CAST rpc anvil_setStorageAt $A $S "$V" --rpc-url $URL > /dev/null
+            done < _slot_vals.txt
+        """
+
+    # Existing dict-only callers must produce a byte-identical command to the
+    # pre-file-support rule, so their cached states never rebuild (several
+    # pinned blocks are older than public RPCs' history windows). The port
+    # therefore stays fixed unless file inputs opt the target into the new
+    # path.
+    port_expr = "$(( 18545 + RANDOM % 10000 ))" if file_srcs else "18545"
+
     genrule(
         name = name,
+        srcs = file_srcs if file_srcs else None,
         outs = [f"{name}.json"],
         tools = {
             "anvil": [f"{tool}|anvil"],
@@ -284,7 +338,7 @@ def anvil_fork_state(
         },
         cmd = f"""
             set -e
-            PORT=18545
+            PORT={port_expr}
             URL=http://localhost:$PORT
 
             # Start Anvil with fork in background
@@ -307,8 +361,7 @@ def anvil_fork_state(
                 fi
                 sleep 1
             done
-
-            # Execute setup commands (warmup, deploy, fund)
+{file_cmds}            # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
             {setup_cmds}
 
