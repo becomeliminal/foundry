@@ -294,9 +294,10 @@ def anvil_fork_state(
     # address local and later reads return empty), then set code, then write the
     # values back. Loops read from srcs, so the slot count never hits the
     # kernel's argument-size cap the way inlined commands do.
-    file_cmds = "true"
+    file_cmds = ""
     if warmup_storage_file:
         file_cmds += """
+            # File-driven warmup (large slot/address sets)
             : > _slot_vals.txt
             grep -vE '^[[:space:]]*(#|$)' $SRCS_STORAGE | while read -r A S _comment; do
                 V=$($TOOLS_CAST storage $A $S --rpc-url $URL)
@@ -317,9 +318,16 @@ def anvil_fork_state(
             done < _slot_vals.txt
         """
 
+    # Existing dict-only callers must produce a byte-identical command to the
+    # pre-file-support rule, so their cached states never rebuild (several
+    # pinned blocks are older than public RPCs' history windows). The port
+    # therefore stays fixed unless file inputs opt the target into the new
+    # path.
+    port_expr = "$(( 18545 + RANDOM % 10000 ))" if file_srcs else "18545"
+
     genrule(
         name = name,
-        srcs = file_srcs,
+        srcs = file_srcs if file_srcs else None,
         outs = [f"{name}.json"],
         tools = {
             "anvil": [f"{tool}|anvil"],
@@ -327,9 +335,7 @@ def anvil_fork_state(
         },
         cmd = f"""
             set -e
-            # A fixed port makes concurrently-building fork states collide;
-            # pick a free one per build.
-            PORT=$(( 18545 + RANDOM % 10000 ))
+            PORT={port_expr}
             URL=http://localhost:$PORT
 
             # Start Anvil with fork in background
@@ -353,9 +359,7 @@ def anvil_fork_state(
                 sleep 1
             done
 
-            # File-driven warmup (large slot/address sets)
             {file_cmds}
-
             # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
             {setup_cmds}
