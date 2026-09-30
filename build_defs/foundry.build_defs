@@ -74,6 +74,8 @@ def anvil_fork_state(
     block_number: int,
     warmup_addresses: list = [],
     warmup_storage: dict = {},
+    warmup_addresses_file: str = "",
+    warmup_storage_file: str = "",
     set_storage: dict = {},
     deploy_code: dict = {},
     fund_accounts: dict = {},
@@ -132,6 +134,13 @@ def anvil_fork_state(
             Their bytecode will be fetched and persisted.
         warmup_storage: Storage slots to prefetch from fork. Format: {address: [slot, ...]}
             Slots are hex strings like "0x0", "0x1", etc.
+        warmup_addresses_file: A source file with one contract address per line
+            (blank lines and #-comments ignored). Use for large address sets:
+            inline lists are baked into the genrule's shell command, which the
+            kernel caps at MAX_ARG_STRLEN (~131 KB, ≈225 storage slots).
+        warmup_storage_file: A source file with "ADDRESS SLOT" per line (blank
+            lines and #-comments ignored). File-driven slots have no count
+            ceiling; combine freely with the inline dict.
         set_storage: Set custom storage values. Format: {address: {slot: value}}
             Use this to configure contract state (e.g., Safe owners, EntryPoint deposits).
             Both slot and value should be 32-byte hex strings.
@@ -275,8 +284,42 @@ def anvil_fork_state(
     all_cmds = warmup_cmds + set_storage_cmds + deploy_cmds + fund_cmds
     setup_cmds = " && ".join(all_cmds) if all_cmds else "true"
 
+    file_srcs = {}
+    if warmup_storage_file:
+        file_srcs["storage"] = [warmup_storage_file]
+    if warmup_addresses_file:
+        file_srcs["addresses"] = [warmup_addresses_file]
+
+    # File-driven warmup: read every slot BEFORE any setCode (setCode marks the
+    # address local and later reads return empty), then set code, then write the
+    # values back. Loops read from srcs, so the slot count never hits the
+    # kernel's argument-size cap the way inlined commands do.
+    file_cmds = ""
+    if warmup_storage_file:
+        file_cmds += """
+            : > _slot_vals.txt
+            grep -vE '^\s*(#|$)' $SRCS_STORAGE | while read -r A S; do
+                V=$($TOOLS_CAST storage $A $S --rpc-url $URL)
+                echo "$A $S $V" >> _slot_vals.txt
+            done
+        """
+    if warmup_addresses_file:
+        file_cmds += """
+            grep -vE '^\s*(#|$)' $SRCS_ADDRESSES | while read -r A; do
+                CODE=$($TOOLS_CAST code $A --rpc-url $URL)
+                $TOOLS_CAST rpc anvil_setCode $A "$CODE" --rpc-url $URL > /dev/null
+            done
+        """
+    if warmup_storage_file:
+        file_cmds += """
+            while read -r A S V; do
+                $TOOLS_CAST rpc anvil_setStorageAt $A $S "$V" --rpc-url $URL > /dev/null
+            done < _slot_vals.txt
+        """
+
     genrule(
         name = name,
+        srcs = file_srcs,
         outs = [f"{name}.json"],
         tools = {
             "anvil": [f"{tool}|anvil"],
@@ -284,7 +327,9 @@ def anvil_fork_state(
         },
         cmd = f"""
             set -e
-            PORT=18545
+            # A fixed port makes concurrently-building fork states collide;
+            # pick a free one per build.
+            PORT=$(( 18545 + RANDOM % 10000 ))
             URL=http://localhost:$PORT
 
             # Start Anvil with fork in background
@@ -307,6 +352,9 @@ def anvil_fork_state(
                 fi
                 sleep 1
             done
+
+            # File-driven warmup (large slot/address sets)
+            {file_cmds if file_cmds else "true"}
 
             # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
