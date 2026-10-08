@@ -1,5 +1,5 @@
 [please]
-version = 17.8.7
+version = 17.31.2
 
 [PluginDefinition]
 name = foundry

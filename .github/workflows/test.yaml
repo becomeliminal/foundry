@@ -1,0 +1,46 @@
+# Runs the test suite on Linux and on macOS. anvil_fork_state's build command is
+# shell run on the user's machine, unsandboxed because it needs the network, and
+# macOS differs from Linux in ways a Linux-only run never sees: /bin/bash there
+# is 3.2, and there are no network namespaces, so anything two builds share —
+# a port, say — is shared for real (test/fork_state_block_test.sh).
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.runner }}
+    name: test (${{ matrix.runner }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The bash plz runs actions with is macOS's own 3.2
+        if: runner.os == 'macOS'
+        run: |
+          # plz's default build path; a newer bash first on it would make this
+          # job stop testing what a developer's Mac runs.
+          v=$(PATH=/usr/local/bin:/usr/bin:/bin bash -c 'echo $BASH_VERSION')
+          echo "bash on plz's path: $v"
+          case "$v" in (3.*) ;; (*) echo "expected bash 3.x, got $v"; exit 1;; esac
+
+      # The tests whose fork states a public RPC can still regenerate. The
+      # Arbitrum ones (safe_creation, handleops, morpho_vault) pin block
+      # 411260000, which arb1.arbitrum.io no longer serves ("historical state
+      # is not available"); they need an archive RPC to run.
+      - name: Test
+        run: ./pleasew test //test:fork_state_block_test //test:warmup_storage_test //test:eip3009_test
