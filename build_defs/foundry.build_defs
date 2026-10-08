@@ -80,6 +80,7 @@ def anvil_fork_state(
     deploy_code: dict = {},
     fund_accounts: dict = {},
     foundry_tool: str = "",
+    committed: bool = False,
     visibility: list = [],
 ):
     """
@@ -149,6 +150,14 @@ def anvil_fork_state(
         fund_accounts: Fund accounts with ETH. Format: {address: amount}
             Amount can be human-readable: "100 ether", "0.5 ether", "1000000 wei"
         foundry_tool: Path to foundry rule. Default: //third_party/binary:foundry
+        committed: Serve a state committed to the repo instead of forking the
+            live chain on every build that lacks it cached. The package must
+            hold {name}.state.json (the dump) and {name}.state.spec (the
+            declaration it was made from). {name} copies the dump and fails
+            if the declaration has changed since: run
+            `plz run //pkg:{name}_regenerate` to fork the chain again and
+            rewrite both files, then commit them. Builds then never touch an
+            RPC, so a pin outlives the RPC's history.
         visibility: Visibility declaration for the rule.
 
     EXAMPLES:
@@ -319,10 +328,10 @@ def anvil_fork_state(
             done < _slot_vals.txt
         """
 
-    genrule(
-        name = name,
+    live = genrule(
+        name = tag(name, "live") if committed else name,
         srcs = file_srcs if file_srcs else None,
-        outs = [f"{name}.json"],
+        outs = [f"{name}.live.json" if committed else f"{name}.json"],
         tools = {
             "anvil": [f"{tool}|anvil"],
             "cast": [f"{tool}|cast"],
@@ -412,6 +421,85 @@ def anvil_fork_state(
             echo "State saved to $OUTS"
         """,
         sandbox = False,
-        visibility = visibility,
+        visibility = None if committed else visibility,
         building_description = f"Generating fork state from {fork_url} at block {block_number}...",
+    )
+    if not committed:
+        return live
+
+    # The declaration, as text: what {name}.state.json was made from. Committed
+    # beside the dump, so a PR that moves a pin shows this diff next to it.
+    spec_lines = [
+        f"fork_url {fork_url}",
+        f"chain_id {chain_id}",
+        f"block_number {block_number}",
+    ] + [f"warmup_address {a}" for a in warmup_addresses] + [
+        f"warmup_storage {a} {sl}" for a, slots in warmup_storage.items() for sl in slots
+    ] + [
+        f"set_storage {a} {sl} {v}" for a, slots in set_storage.items() for sl, v in slots.items()
+    ] + [f"deploy_code {a} {c}" for a, c in deploy_code.items()] + [
+        f"fund_account {a} {amt}" for a, amt in fund_accounts.items()
+    ]
+    spec_cmds = ["cat > $OUT <<'FORK_STATE_SPEC'"] + spec_lines + ["FORK_STATE_SPEC"]
+    if warmup_addresses_file:
+        spec_cmds += ["echo '# warmup_addresses_file' >> $OUT", "grep -vE '^[[:space:]]*(#|$)' $SRCS_ADDRESSES >> $OUT"]
+    if warmup_storage_file:
+        spec_cmds += ["echo '# warmup_storage_file' >> $OUT", "grep -vE '^[[:space:]]*(#|$)' $SRCS_STORAGE >> $OUT"]
+    spec = genrule(
+        name = f"{name}_spec",
+        srcs = file_srcs if file_srcs else None,
+        outs = [f"{name}.spec"],
+        cmd = "\n".join(spec_cmds),
+    )
+
+    # Forks the live chain again and rewrites the committed dump and spec in
+    # the source tree. Run on purpose; commit what it writes.
+    pkg = package_name()
+    genrule(
+        name = f"{name}_regenerate",
+        deps = [live, spec],
+        outs = [f"{name}_regenerate.sh"],
+        binary = True,
+        cmd = "\n".join([
+            "cat > $OUT <<REGENERATE",
+            "#!/bin/sh",
+            "set -e",
+            'cd "\\$(git rev-parse --show-toplevel)"',
+            f"cp $(out_location {live}) {pkg}/{name}.state.json",
+            f"cp $(out_location {spec}) {pkg}/{name}.state.spec",
+            f'echo "Wrote {pkg}/{name}.state.json and {pkg}/{name}.state.spec; commit both."',
+            "REGENERATE",
+            "chmod +x $OUT",
+        ]),
+    )
+
+    # What builds and tests use: the committed dump, refused if the
+    # declaration moved without it being regenerated. Looked up by glob so a
+    # package without them yet still loads, letting _regenerate make them.
+    committed_files = glob([f"{name}.state.json", f"{name}.state.spec"], allow_empty = True)
+    if len(committed_files) != 2:
+        return genrule(
+            name = name,
+            outs = [f"{name}.json"],
+            cmd = f'echo "{pkg} has no committed {name}.state.json and {name}.state.spec. Run: plz run //{pkg}:{name}_regenerate, then commit both files." >&2; exit 1',
+            visibility = visibility,
+        )
+    return genrule(
+        name = name,
+        srcs = {
+            "state": [f"{name}.state.json"],
+            "committed_spec": [f"{name}.state.spec"],
+            "spec": [spec],
+        },
+        outs = [f"{name}.json"],
+        cmd = " && ".join([
+            'if ! cmp -s $SRCS_COMMITTED_SPEC $SRCS_SPEC; then '
+            + f'echo "{pkg}/{name}.state.json was made from a different declaration than its BUILD rule now has:" >&2; '
+            + 'diff $SRCS_COMMITTED_SPEC $SRCS_SPEC >&2 || true; '
+            + f'echo "Run: plz run //{pkg}:{name}_regenerate, then commit both files." >&2; '
+            + 'exit 1; fi',
+            "cp $SRCS_STATE $OUT",
+        ]),
+        visibility = visibility,
+        building_description = "Checking the committed fork state...",
     )
