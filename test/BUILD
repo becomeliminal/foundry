@@ -22,9 +22,10 @@ foundry(
 # =============================================================================
 anvil_fork_state(
     name = "arbitrum_fork_state",
-    fork_url = "https://arb1.arbitrum.io/rpc",
+    fork_url = "https://arbitrum-one.public.blastapi.io",
     chain_id = 42161,
-    block_number = 411260000,  # Pin to stable block for reproducibility
+    block_number = 411260000,
+    committed = True,
     warmup_addresses = [
         # ERC-4337 Infrastructure
         "0x0000000071727De22E5E9d8BAf0edAc6f37da032",  # EntryPoint v0.7
@@ -227,4 +228,35 @@ gentest(
     },
     no_test_output = True,
     labels = ["integration"],
+)
+
+# A committed fork state: builds serve base_fork_state_committed.state.json from
+# the repo and never fork the chain. `plz run :base_fork_state_committed_regenerate`
+# rewrites it (and its .state.spec) from the live RPC.
+anvil_fork_state(
+    name = "base_fork_state_committed",
+    fork_url = "https://mainnet.base.org",
+    chain_id = 8453,
+    block_number = 23000000,
+    committed = True,
+    foundry_tool = ":foundry",
+    warmup_addresses = [
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC proxy on Base
+    ],
+    fund_accounts = {
+        "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": "10 ether",
+    },
+)
+
+# The committed state loads offline and holds what its declaration asked for.
+gentest(
+    name = "committed_state_test",
+    test_cmd = "bash $DATA_TEST_SCRIPT",
+    data = {
+        "ANVIL": [":foundry|anvil"],
+        "CAST": [":foundry|cast"],
+        "STATE": [":base_fork_state_committed"],
+        "TEST_SCRIPT": ["committed_state_test.sh"],
+    },
+    no_test_output = True,
 )

@@ -1,0 +1,5 @@
+fork_url https://mainnet.base.org
+chain_id 8453
+block_number 23000000
+warmup_address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+fund_account 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 10 ether

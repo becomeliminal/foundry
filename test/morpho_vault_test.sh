@@ -9,9 +9,6 @@ STATE_FILE="${DATA_STATE}"
 ANVIL="${DATA_ANVIL}"
 CAST="${DATA_CAST}"
 
-# Use unique port to avoid conflicts
-PORT=19877
-RPC_URL="http://127.0.0.1:${PORT}"
 
 # Contract addresses
 MORPHO_VAULT="0x7e97fa6893871A2751B5fE961978DCCb2c201E65"  # Gauntlet USDC Core Vault
@@ -26,19 +23,33 @@ TEST_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2
 echo "Starting anvil with state file: ${STATE_FILE}"
 
 # Start anvil with the state
-$ANVIL --load-state "$STATE_FILE" --chain-id 42161 --port $PORT &
+# On a port Anvil picks itself (--port 0), read back from its log: tests run
+# side by side without network isolation here, and two sharing a fixed port
+# made one fail to bind.
+ANVIL_LOG=$(mktemp)
+$ANVIL --load-state "$STATE_FILE" --chain-id 42161 --port 0 > "$ANVIL_LOG" 2>&1 &
 ANVIL_PID=$!
-trap "kill $ANVIL_PID 2>/dev/null || true" EXIT
+trap 'kill $ANVIL_PID 2>/dev/null || true; rm -f "$ANVIL_LOG"' EXIT
 
-# Wait for anvil to be ready
 echo "Waiting for anvil to start..."
-for i in {1..30}; do
-    if $CAST chain-id --rpc-url $RPC_URL 2>/dev/null; then
-        echo "Anvil ready"
-        break
+PORT=""
+for i in {1..60}; do
+    PORT=$(sed -n 's/^Listening on 127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p' "$ANVIL_LOG")
+    [ -n "$PORT" ] && break
+    if ! kill -0 $ANVIL_PID 2>/dev/null; then
+        echo "FAIL: Anvil exited before it was listening:"
+        cat "$ANVIL_LOG"
+        exit 1
     fi
     sleep 0.5
 done
+if [ -z "$PORT" ]; then
+    echo "FAIL: Anvil did not report a port within 30s:"
+    cat "$ANVIL_LOG"
+    exit 1
+fi
+RPC_URL="http://127.0.0.1:${PORT}"
+echo "Anvil ready on port $PORT"
 
 FAILED=0
 

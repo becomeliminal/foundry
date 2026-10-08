@@ -112,13 +112,46 @@ anvil_fork_state(
 | `deploy_code` | dict | Deploy custom bytecode: `{address: "0x..."}` |
 | `fund_accounts` | dict | Fund accounts: `{address: "100 ether"}` |
 | `foundry_tool` | str | Path to foundry rule (default: `//third_party/binary:foundry`) |
+| `committed` | bool | Serve a state committed to the repo instead of forking on every uncached build (below) |
 | `visibility` | list | Visibility declaration |
 
 ### Common Fork URLs
 
-- Arbitrum: `https://arb1.arbitrum.io/rpc`
+- Arbitrum: `https://arbitrum-one.public.blastapi.io` (an archive node). `https://arb1.arbitrum.io/rpc` keeps only about an hour of state, so a pinned block soon stops building there.
 - Base: `https://mainnet.base.org`
 - Ethereum: `https://eth.llamarpc.com`
+
+### Committed States
+
+By default a fork state is rebuilt from the live RPC by any build that doesn't
+have it cached: a fresh clone, CI after a cache eviction, or `plz clean`. Once
+the RPC prunes the pinned block, that build fails. With `committed = True`, the
+dump lives in the repo instead, and builds never touch an RPC:
+
+```python
+anvil_fork_state(
+    name = "arbitrum_state",
+    fork_url = "https://arbitrum-one.public.blastapi.io",
+    chain_id = 42161,
+    block_number = 411260000,
+    committed = True,
+    warmup_addresses = ["0x0000000071727De22E5E9d8BAf0edAc6f37da032"],
+)
+```
+
+It makes three targets from the one declaration:
+
+| Target | What it does |
+|---|---|
+| `arbitrum_state` | The committed `arbitrum_state.state.json`. Fails if `arbitrum_state.state.spec` no longer matches the declaration, showing the difference |
+| `arbitrum_state_spec` | The declaration as text: chain, block, URL, warm-up lists and files, storage, code, funding |
+| `arbitrum_state_regenerate` | Forks the live chain and rewrites both committed files. Run it on purpose |
+
+To create or move a state: change the declaration, run
+`plz run //pkg:arbitrum_state_regenerate`, and commit both
+`arbitrum_state.state.json` and `arbitrum_state.state.spec`. A declaration
+changed without regenerating fails the build rather than serving the old
+state. Until both files exist, the state target fails with the command to run.
 
 ## Using State Files in Tests
 
