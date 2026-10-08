@@ -205,3 +205,26 @@ gentest(
     no_test_output = True,
     labels = ["integration"],
 )
+
+# A second, minimal Base state at a different block, so the test below can
+# tell two concurrently built states apart by block number alone.
+anvil_fork_state(
+    name = "base_fork_state_later",
+    fork_url = "https://mainnet.base.org",
+    chain_id = 8453,
+    block_number = 23000100,
+    foundry_tool = ":foundry",
+)
+
+# Each fork state holds its own chain, even when several build at once
+gentest(
+    name = "fork_state_block_test",
+    test_cmd = "bash $DATA_TEST_SCRIPT",
+    data = {
+        "EARLIER_STATE": [":base_fork_state"],
+        "LATER_STATE": [":base_fork_state_later"],
+        "TEST_SCRIPT": ["fork_state_block_test.sh"],
+    },
+    no_test_output = True,
+    labels = ["integration"],
+)

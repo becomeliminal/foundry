@@ -294,9 +294,7 @@ def anvil_fork_state(
     # address local and later reads return empty), then set code, then write the
     # values back. Loops read from srcs, so the slot count never hits the
     # kernel's argument-size cap the way inlined commands do.
-    # Renders between the readiness loop and the setup commands. The default
-    # is exactly the original blank line, keeping dict-only callers' commands
-    # byte-identical (and their cached states valid).
+    # Renders between the readiness check and the setup commands.
     file_cmds = "\n"
     if warmup_storage_file:
         file_cmds += """
@@ -321,13 +319,6 @@ def anvil_fork_state(
             done < _slot_vals.txt
         """
 
-    # Existing dict-only callers must produce a byte-identical command to the
-    # pre-file-support rule, so their cached states never rebuild (several
-    # pinned blocks are older than public RPCs' history windows). The port
-    # therefore stays fixed unless file inputs opt the target into the new
-    # path.
-    port_expr = "$(( 18545 + RANDOM % 10000 ))" if file_srcs else "18545"
-
     genrule(
         name = name,
         srcs = file_srcs if file_srcs else None,
@@ -336,31 +327,61 @@ def anvil_fork_state(
             "anvil": [f"{tool}|anvil"],
             "cast": [f"{tool}|cast"],
         },
+        # Anvil binds a port of its own choosing (--port 0) and the rule reads
+        # it back, rather than every target sharing 18545. This genrule runs
+        # unsandboxed (it needs the network), so on a machine without network
+        # namespaces — macOS, or Linux with sandboxing off — two fork states
+        # building at once used to collide on that port: the loser's Anvil
+        # failed to bind, the loser's cast commands then talked to the WINNER's
+        # Anvil, and the loser dumped the winner's chain under its own name.
+        # Before anything runs against it, the rule also checks that the Anvil
+        # answering is this build's, at the chain and block it was asked for,
+        # and fails the build if not.
         cmd = f"""
             set -e
-            PORT={port_expr}
-            URL=http://localhost:$PORT
+            LOG=$TMP_DIR/anvil.log
 
-            # Start Anvil with fork in background
+            # Start Anvil with fork in background, on a port it picks itself
             $TOOLS_ANVIL --fork-url {fork_url} \\
                 --fork-block-number {block_number} \\
                 --chain-id {chain_id} \\
-                --port $PORT \\
-                --silent &
+                --port 0 > $LOG 2>&1 &
             PID=$!
 
             # Cleanup on exit
             trap "kill $PID 2>/dev/null || true" EXIT
 
-            # Wait for Anvil to be ready (up to 60s)
+            # Wait for Anvil to say which port it bound (up to 60s), failing as
+            # soon as it exits instead of waiting out the minute.
             echo "Waiting for Anvil to start..."
-            for i in $(seq 1 60); do
-                if $TOOLS_CAST chain-id --rpc-url $URL 2>/dev/null; then
-                    echo "Anvil ready after $i seconds"
+            PORT=""
+            for i in $(seq 1 120); do
+                PORT=$(sed -n 's/^Listening on 127\\.0\\.0\\.1:\\([0-9][0-9]*\\)$/\\1/p' $LOG)
+                if [ -n "$PORT" ]; then
                     break
                 fi
-                sleep 1
+                if ! kill -0 $PID 2>/dev/null; then
+                    echo "Anvil exited before it was listening:"
+                    cat $LOG
+                    exit 1
+                fi
+                sleep 0.5
             done
+            if [ -z "$PORT" ]; then
+                echo "Anvil did not report a port within 60s:"
+                cat $LOG
+                exit 1
+            fi
+            URL=http://127.0.0.1:$PORT
+
+            # The Anvil on that port must be this build's, forked where asked.
+            GOT_CHAIN=$($TOOLS_CAST chain-id --rpc-url $URL)
+            GOT_BLOCK=$($TOOLS_CAST block-number --rpc-url $URL)
+            if [ "$GOT_CHAIN" != "{chain_id}" ] || [ "$GOT_BLOCK" != "{block_number}" ]; then
+                echo "Anvil on port $PORT is at chain $GOT_CHAIN block $GOT_BLOCK; expected chain {chain_id} block {block_number}"
+                exit 1
+            fi
+            echo "Anvil ready on port $PORT at chain $GOT_CHAIN block $GOT_BLOCK"
 {file_cmds}            # Execute setup commands (warmup, deploy, fund)
             echo "Running setup commands..."
             {setup_cmds}
@@ -369,10 +390,24 @@ def anvil_fork_state(
             echo "Mining block..."
             $TOOLS_CAST rpc evm_mine --rpc-url $URL > /dev/null
 
-            # Dump state - anvil_dumpState returns hex-encoded gzipped JSON
-            # Pipeline: hex -> binary (gzip) -> JSON
+            # Still this build's Anvil, one block on from the fork point.
+            if ! kill -0 $PID 2>/dev/null; then
+                echo "Anvil exited before the state was dumped:"
+                cat $LOG
+                exit 1
+            fi
+            GOT_BLOCK=$($TOOLS_CAST block-number --rpc-url $URL)
+            if [ "$GOT_BLOCK" != "$(( {block_number} + 1 ))" ]; then
+                echo "Anvil is at block $GOT_BLOCK after mining; expected one past {block_number}"
+                exit 1
+            fi
+
+            # Dump state - anvil_dumpState returns hex-encoded gzipped JSON, as
+            # a quoted JSON string. Pipeline: strip quotes -> binary (gzip) ->
+            # JSON. tr rather than jq: jq is not on plz's build path on a Mac
+            # before macOS 15, where it comes only from Homebrew.
             echo "Dumping state..."
-            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | jq -r '.' | xxd -r -p | gunzip > $OUTS
+            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | tr -d '"' | xxd -r -p | gunzip > $OUTS
 
             echo "State saved to $OUTS"
         """,
