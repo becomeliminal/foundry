@@ -14,7 +14,9 @@ FAILED=0
 check() {
     local name="$1" state="$2" pinned="$3"
     local got
-    got=$(jq -r '.best_block_number' "$state")
+    # The state is one line of compact JSON; no jq, which a Mac before
+    # macOS 15 has only from Homebrew.
+    got=$(grep -o '"best_block_number":[0-9]*' "$state" | cut -d: -f2)
     if [ "$got" = "$((pinned + 1))" ]; then
         echo "PASS: $name is at block $got (pinned $pinned)"
     else

@@ -402,10 +402,12 @@ def anvil_fork_state(
                 exit 1
             fi
 
-            # Dump state - anvil_dumpState returns hex-encoded gzipped JSON
-            # Pipeline: hex -> binary (gzip) -> JSON
+            # Dump state - anvil_dumpState returns hex-encoded gzipped JSON, as
+            # a quoted JSON string. Pipeline: strip quotes -> binary (gzip) ->
+            # JSON. tr rather than jq: jq is not on plz's build path on a Mac
+            # before macOS 15, where it comes only from Homebrew.
             echo "Dumping state..."
-            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | jq -r '.' | xxd -r -p | gunzip > $OUTS
+            $TOOLS_CAST rpc anvil_dumpState --rpc-url $URL | tr -d '"' | xxd -r -p | gunzip > $OUTS
 
             echo "State saved to $OUTS"
         """,
