@@ -1,3 +1,30 @@
+def _fetch_archive(url:str, dest:str, hashes:list):
+    """Shell: download url to dest, check its sha256, extract, and delete dest.
+
+    dest is in the action temp dir, so the tarball is not an output. A
+    remote_file cannot arrange that: its output is the archive. Any listed
+    hash may match; no hashes skips the check. The action is local and
+    unsandboxed, because the fetch needs the network.
+    """
+    qdest = "'" + dest.replace("'", "'\\''") + "'"
+    qurl = "'" + url.replace("'", "'\\''") + "'"
+    # _archive is not an output. Please creates the parent of every output
+    # before the action runs, and an entry of that name would collide with it.
+    fetch = "curl -fsSL --retry 5 --retry-delay 2 -o %s %s" % (qdest, qurl)
+    extract = "mkdir -p _archive && tar -xzf %s -C _archive && rm -f %s" % (qdest, qdest)
+    if not hashes:
+        return "%s && %s" % (fetch, extract)
+    digest = "digest=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum %s | awk '{print $1}'; else openssl dgst -sha256 %s | awk '{print $NF}'; fi)" % (qdest, qdest)
+    checks = []
+    for h in hashes:
+        if ":" in h:
+            _, _, h = h.rpartition(":")
+            h = h.strip()
+        checks.append("[ \"$digest\" = '%s' ]" % h)
+    verify = "{ { " + " || ".join(checks) + "; } || { echo \"bad hash for " + url + ": $digest\" >&2; exit 1; }; }"
+    return " && ".join([fetch, digest, verify, extract])
+
+
 def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibility:list=[]):
     """
     Downloads pre-built Foundry binaries (anvil, forge, cast, chisel).
@@ -38,15 +65,11 @@ def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibilit
     target = f'{os}_{arch}'
     url = f"https://github.com/foundry-rs/foundry/releases/download/v{version}/foundry_v{version}_{target}.tar.gz"
 
-    download = remote_file(
-        name = tag(name, "download"),
-        url = url,
-        hashes = hashes,
-    )
-
+    # The tarball is fetched here and removed before the action finishes, so
+    # it is not an output beside the binaries. A remote_file's output is the
+    # archive, and deleting it afterwards makes Please fetch it again.
     build_rule(
         name = name,
-        srcs = [download],
         outs = {
             "anvil": [f"{target}/anvil"],
             "forge": [f"{target}/forge"],
@@ -54,14 +77,16 @@ def foundry(name:str, version:str, os=None, arch=None, hashes:list=[], visibilit
             "chisel": [f"{target}/chisel"],
         },
         cmd = " && ".join([
+            _fetch_archive(url, "foundry.tar.gz", hashes),
             f"mkdir -p {target}",
-            "tar -xzf $SRC",
-            f"mv anvil {target}/",
-            f"mv forge {target}/",
-            f"mv cast {target}/",
-            f"mv chisel {target}/",
+            f"mv _archive/anvil {target}/",
+            f"mv _archive/forge {target}/",
+            f"mv _archive/cast {target}/",
+            f"mv _archive/chisel {target}/",
         ]),
         binary = True,
+        local = True,
+        sandbox = False,
         visibility = visibility,
         building_description = f"Extracting Foundry v{version} for {target}...",
     )
